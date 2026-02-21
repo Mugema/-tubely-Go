@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -8,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
 	"github.com/google/uuid"
@@ -42,19 +45,21 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 	if err != nil {
 		respondWithError(w, 501, "Unable to assign memory", err)
 	}
-	mimeType, _, _ := mime.ParseMediaType(r.Header.Get("content-type"))
-	if err != nil {
-		respondWithError(w, http.StatusBadRequest, "error", err)
-	}
-	if mimeType != "image/jpeg" && mimeType != "image/png" {
-		respondWithError(w, http.StatusBadRequest, "invalid file type", errors.New("wrong file"))
-	}
 
 	file, header, err := r.FormFile("thumbnail")
 	if err != nil {
 		respondWithError(w, 501, "Error form file", err)
 	}
 	mediaType := header.Header.Get("content-type")
+
+	mimeType, _, _ := mime.ParseMediaType(mediaType)
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "error", err)
+	}
+	fmt.Println(mimeType)
+	if mimeType != "image/jpeg" && mimeType != "image/png" {
+		respondWithError(w, http.StatusBadRequest, "invalid file type", errors.New("wrong file"))
+	}
 
 	video, err := cfg.db.GetVideo(videoID)
 	if err != nil {
@@ -64,8 +69,16 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 	if video.UserID != userID {
 		respondWithError(w, 501, "Database error", err)
 	}
+	newUrl := make([]byte, 32)
+	_, err = rand.Read(newUrl)
+	if err != nil {
+		respondWithError(w, 501, "Error creating filename", err)
+	}
 
-	fileName := filepath.Join(cfg.assetsRoot, fmt.Sprintf("%v.%v", videoID, "png"))
+	id := base64.URLEncoding.EncodeToString(newUrl)
+
+	fileName := filepath.Join(cfg.assetsRoot, fmt.Sprintf("%v.%v", id, getExtension(mediaType)))
+	fmt.Println(fileName)
 
 	thumbNailFile, err := os.Create(fileName)
 	if err != nil {
@@ -78,7 +91,7 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		respondWithError(w, 501, "Error writing to file", err)
 	}
 
-	url := fmt.Sprintf("http://localhost:<%v>/assets/<%v>.<%v>", cfg.port, videoID, mediaType)
+	url := fmt.Sprintf("http://localhost:%v/assets/%v.%v", cfg.port, id, getExtension(mediaType))
 	video.ThumbnailURL = &url
 
 	err = cfg.db.UpdateVideo(video)
@@ -88,4 +101,12 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 
 	respondWithJSON(w, http.StatusOK, video)
 
+}
+
+func getExtension(media string) string {
+	s := strings.Split(media, "/")
+	if len(s) == 1 {
+		return ""
+	}
+	return s[1]
 }
