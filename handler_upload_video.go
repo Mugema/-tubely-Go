@@ -1,14 +1,17 @@
 package main
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"mime"
 	"net/http"
 	"os"
+	"os/exec"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
@@ -75,16 +78,17 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	tempFile, err := os.CreateTemp("", "tubely-upload.mp4")
+	tempFile, err := os.CreateTemp("", "tubely-upload-*.mp4")
 	if err != nil {
 		respondWithError(w, 500, "Error creating temp file", err)
 	}
-	defer os.Remove("tubely-upload.mp4")
+	defer os.Remove(tempFile.Name())
 	defer tempFile.Close()
 
 	_, err = io.Copy(tempFile, file)
 	if err != nil {
 		respondWithError(w, 500, "Error copying to file", err)
+		return
 	}
 
 	_, err = tempFile.Seek(0, io.SeekStart)
@@ -98,7 +102,22 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		respondWithError(w, 500, "Error creating new filename", err)
 	}
 
-	fileName := base64.URLEncoding.EncodeToString(b) + fileType
+	aspectRatio, err := getVideoAspectRatio(tempFile.Name())
+	if err != nil {
+		respondWithError(w, 500, "Error getting the aspect ratio", err)
+		return
+	}
+
+	var aspectType string
+	if aspectRatio == "16:9" {
+		aspectType = "landscape"
+	} else if aspectRatio == "9:16" {
+		aspectType = "portrait"
+	} else {
+		aspectType = "other"
+	}
+
+	fileName := fmt.Sprintf("%v/%v.%v", aspectType, base64.URLEncoding.EncodeToString(b), fileType)
 
 	contentType := header.Header.Get("content-type")
 
@@ -124,4 +143,43 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	w.Header().Set("content-type", contentType)
 	respondWithJSON(w, http.StatusOK, video)
 	return
+}
+
+func getVideoAspectRatio(filePath string) (string, error) {
+	cmd := exec.Command("ffprobe",
+		"-v", "error",
+		"-print_format", "json",
+		"-show_streams", filePath)
+
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+
+	err := cmd.Run()
+
+	if err != nil {
+		fmt.Printf("error is at 1 %v\n", err)
+		return "", err
+	}
+
+	type result struct {
+		Streams []struct {
+			Width  int `json:"width"`
+			Height int `json:"height"`
+		} `json:"streams"`
+	}
+
+	ffprobeResult := result{}
+
+	err = json.Unmarshal(stdout.Bytes(), &ffprobeResult)
+	if err != nil {
+		fmt.Printf("error is at 2 %v\n", err)
+		return "", err
+	}
+
+	if ffprobeResult.Streams[0].Width == 16*ffprobeResult.Streams[0].Height/9 {
+		return "16:9", nil
+	} else if ffprobeResult.Streams[0].Height == 16*ffprobeResult.Streams[0].Width/9 {
+		return "9:16", nil
+	}
+	return "other", nil
 }
