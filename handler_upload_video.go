@@ -117,13 +117,27 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		aspectType = "other"
 	}
 
+	processedVideo, err := processVideoForFastStart(tempFile.Name())
+	if err != nil {
+		fmt.Printf("Error %v\n", err)
+		respondWithError(w, 500, "Error processing the file", err)
+		return
+	}
+
+	videoFile, err := os.Open(processedVideo)
+	if err != nil {
+		respondWithError(w, 500, "Error opening the file", err)
+		return
+	}
+	defer videoFile.Close()
+
 	fileName := fmt.Sprintf("%v/%v.%v", aspectType, base64.URLEncoding.EncodeToString(b), fileType)
 
 	contentType := header.Header.Get("content-type")
 
 	_, err = cfg.s3Client.PutObject(r.Context(), &s3.PutObjectInput{
 		Bucket:      &cfg.s3Bucket,
-		Body:        tempFile,
+		Body:        videoFile,
 		Key:         &fileName,
 		ContentType: &contentType,
 	})
@@ -182,4 +196,21 @@ func getVideoAspectRatio(filePath string) (string, error) {
 		return "9:16", nil
 	}
 	return "other", nil
+}
+
+func processVideoForFastStart(filepath string) (string, error) {
+	fileName := filepath + ".processing"
+
+	cmd := exec.Command(
+		"ffmpeg",
+		"-i", filepath,
+		"-c", "copy",
+		"-movflags", "faststart",
+		"-f", "mp4", fileName)
+
+	err := cmd.Run()
+	if err != nil {
+		return "", err
+	}
+	return fileName, nil
 }
