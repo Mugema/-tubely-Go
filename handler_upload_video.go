@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
@@ -13,12 +12,9 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"strings"
-	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
-	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/database"
 	"github.com/google/uuid"
 )
 
@@ -150,7 +146,8 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		respondWithError(w, 500, "error uploading the file", err)
 	}
 
-	newVideoUrl := fmt.Sprintf("%v,%v", cfg.s3Bucket, fileName)
+	newVideoUrl := fmt.Sprintf("https://%v/%v", cfg.s3CfDistribution, fileName)
+	fmt.Println(newVideoUrl)
 	video.VideoURL = &newVideoUrl
 
 	err = cfg.db.UpdateVideo(video)
@@ -158,14 +155,8 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		respondWithError(w, 501, "Database error", err)
 	}
 
-	presignedVideo, err := cfg.dbVideoToSignedVideo(video)
-	if err != nil {
-		respondWithError(w, http.StatusBadRequest, "error getting the presigned URL", err)
-		return
-	}
-
 	w.Header().Set("content-type", contentType)
-	respondWithJSON(w, http.StatusOK, presignedVideo)
+	respondWithJSON(w, http.StatusOK, video)
 	return
 }
 
@@ -223,34 +214,4 @@ func processVideoForFastStart(filepath string) (string, error) {
 		return "", err
 	}
 	return fileName, nil
-}
-
-func (cfg *apiConfig) dbVideoToSignedVideo(video database.Video) (database.Video, error) {
-	if video.VideoURL == nil {
-		return video, nil
-	}
-	dbUrl := strings.Split(*video.VideoURL, ",")
-	if len(dbUrl) < 2 {
-		return video, errors.New("request error")
-	}
-	presignedURL, err := generatePresignedURL(cfg.s3Client, dbUrl[0], dbUrl[1], time.Duration(1)*time.Hour)
-	if err != nil {
-		return video, err
-	}
-	video.VideoURL = &presignedURL
-
-	return video, nil
-}
-
-func generatePresignedURL(s3Client *s3.Client, bucket, key string, expireTime time.Duration) (string, error) {
-	presign := s3.NewPresignClient(s3Client)
-	objectInput := s3.GetObjectInput{
-		Bucket: &bucket,
-		Key:    &key,
-	}
-	object, err := presign.PresignGetObject(context.Background(), &objectInput, s3.WithPresignExpires(expireTime))
-	if err != nil {
-		return "", err
-	}
-	return object.URL, err
 }
